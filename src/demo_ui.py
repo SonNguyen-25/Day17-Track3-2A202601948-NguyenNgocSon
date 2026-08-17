@@ -39,28 +39,123 @@ from src.short_term import ShortTermMemory
 from src.utils import GOLDEN_PATH, load_dataset, load_json
 from src.zep_common import get_zep_client
 
+_DATASET_CACHE: dict[str, Any] = {}
+
+
+def _dataset() -> dict[str, Any]:
+    if not _DATASET_CACHE:
+        _DATASET_CACHE.update(load_dataset())
+    return _DATASET_CACHE
+
+
+def _base_short_term_messages(case: dict[str, Any]) -> list[dict[str, str]]:
+    messages = case.get("fixture_messages")
+    if messages:
+        return messages
+    dataset = _dataset()
+    user = next((u for u in dataset["users"] if u["user_id"] == case.get("user_id")), None)
+    if not user:
+        return []
+    session = next(
+        (s for s in user.get("sessions", []) if s["thread_id"] == case.get("thread_id")), None
+    )
+    return (session or {}).get("messages", [])
+
 LAYER_COLORS = {
-    "short_term": "#2563eb",
-    "long_term": "#059669",
-    "episodic": "#d97706",
-    "semantic": "#7c3aed",
+    "short_term": "#38bdf8",
+    "long_term": "#34d399",
+    "episodic": "#fbbf24",
+    "semantic": "#a78bfa",
+    "mixed": "#f472b6",
+}
+
+LAYER_ICONS = {
+    "short_term": "🗨️",
+    "long_term": "🧭",
+    "episodic": "🧩",
+    "semantic": "📚",
+    "mixed": "🔀",
 }
 
 CSS = """
 <style>
-.block-container { padding-top: 2rem; max-width: 1200px; }
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+.block-container { padding-top: 1.4rem; max-width: 1180px; }
+
+/* Hero header */
+.lab-hero {
+    position:relative; overflow:hidden;
+    background: radial-gradient(120% 160% at 0% 0%, #312e81 0%, #4c1d95 45%, #831843 100%);
+    border-radius: 20px; padding: 26px 30px; margin-bottom: 20px;
+    box-shadow: 0 12px 32px rgba(76, 29, 149, 0.35);
+    border: 1px solid rgba(255,255,255,.08);
+}
+.lab-hero h1 {
+    color:#fff; margin:0; font-size:1.65rem; font-weight:800; letter-spacing:-.02em;
+}
+.lab-hero p { color:rgba(255,255,255,.82); margin:.4rem 0 0; font-size:.93rem; }
+.lab-hero .lab-tag {
+    display:inline-block; margin-top:12px; padding:4px 12px; border-radius:999px;
+    background:rgba(255,255,255,.12); color:#fff; font-size:.72rem; font-weight:600;
+    letter-spacing:.03em; backdrop-filter: blur(4px);
+}
+
+/* Badges */
 .lab-badge {
-    display:inline-block; padding:2px 10px; border-radius:999px;
-    color:#fff; font-size:0.75rem; font-weight:600; letter-spacing:.02em;
-    margin-right:6px;
+    display:inline-flex; align-items:center; gap:4px;
+    padding:4px 13px; border-radius:999px;
+    color:#0b1020; font-size:0.74rem; font-weight:700; letter-spacing:.01em;
+    margin-right:6px; box-shadow: 0 2px 6px rgba(0,0,0,.25);
 }
+
+/* Cards */
 .lab-card {
-    border:1px solid rgba(128,128,128,.25); border-radius:12px;
-    padding:14px 16px; margin-bottom:12px; background:rgba(127,127,127,.06);
+    border:1px solid rgba(148,163,184,.18); border-radius:16px;
+    padding:18px 20px; margin-bottom:16px;
+    background: linear-gradient(165deg, rgba(139,92,246,.10), rgba(148,163,184,.03));
+    box-shadow: 0 4px 18px rgba(0,0,0,.18);
 }
-.lab-kv { font-size:0.85rem; opacity:.85; }
-.lab-kv b { opacity:1; }
-.stChatMessage { border-radius:12px; }
+.lab-card b { font-size:1.08rem; }
+.lab-kv { font-size:0.85rem; opacity:.8; }
+.lab-kv b { opacity:1; font-size:.85rem; }
+.lab-query {
+    margin:.7rem 0 0; padding:11px 14px; border-left:3px solid #a78bfa;
+    background: rgba(167,139,250,.08); border-radius:0 10px 10px 0;
+    font-size:.96rem; line-height:1.5;
+}
+
+/* Status pills */
+.lab-status { font-size:.83rem; padding:4px 0; }
+.lab-pill {
+    display:inline-block; padding:2px 10px; border-radius:999px; font-size:.72rem;
+    font-weight:700; margin-left:4px;
+}
+.lab-pill-ok { background:rgba(52,211,153,.15); color:#34d399; }
+.lab-pill-warn { background:rgba(251,191,36,.15); color:#fbbf24; }
+
+/* Budget bars */
+.lab-budget-row { margin-bottom:10px; }
+.lab-budget-label {
+    display:flex; justify-content:space-between; font-size:.78rem;
+    opacity:.85; margin-bottom:3px;
+}
+.lab-budget-track {
+    height:8px; border-radius:999px; background:rgba(148,163,184,.15); overflow:hidden;
+}
+.lab-budget-fill { height:100%; border-radius:999px; }
+
+/* Section titles */
+.lab-section {
+    font-size:1.02rem; font-weight:700; margin:.3rem 0 .6rem; opacity:.95;
+}
+
+/* Chat */
+.stChatMessage { border-radius:16px; }
+[data-testid="stChatMessageContent"] { font-size:.95rem; }
+
+code, pre, .stCode { font-family:'JetBrains Mono', monospace !important; }
 </style>
 """
 
@@ -81,7 +176,24 @@ def format_case(case: dict[str, Any]) -> str:
 
 def layer_badge(layer: str) -> str:
     color = LAYER_COLORS.get(layer, "#475569")
-    return f'<span class="lab-badge" style="background:{color}">{layer}</span>'
+    icon = LAYER_ICONS.get(layer, "•")
+    return f'<span class="lab-badge" style="background:{color}">{icon} {layer}</span>'
+
+
+def budget_bar_html(layer: str, b: dict[str, int]) -> str:
+    color = LAYER_COLORS.get(layer, "#475569")
+    icon = LAYER_ICONS.get(layer, "•")
+    used = b.get("used_tokens", 0)
+    limit = max(1, b.get("limit_tokens", 1))
+    raw = b.get("raw_tokens", 0)
+    pct = min(100, round(100 * used / limit))
+    return (
+        '<div class="lab-budget-row">'
+        f'<div class="lab-budget-label"><span>{icon} <b>{layer}</b></span>'
+        f'<span>{used} / {limit} tok · raw {raw}</span></div>'
+        f'<div class="lab-budget-track"><div class="lab-budget-fill" '
+        f'style="width:{pct}%;background:{color}"></div></div></div>'
+    )
 
 
 def retrieve_for_case(
@@ -107,40 +219,87 @@ def retrieve_for_case(
       * Keep user_id and thread_id from the loaded case.
       * Finish with memory.assemble_context(layers).
     """
-    _ = (memory, case, extra_messages, settings, ShortTermMemory)
-    raise NotImplementedError("BONUS TODO: run student retrieval for the loaded case")
+    query = case.get("query", "")
+    user_id = case.get("user_id", "")
+    thread_id = case.get("thread_id", "")
+    expected_layer = case.get("expected_layer", "mixed")
+    wanted = case.get("retrieve_layers") or (
+        ["long_term", "semantic"] if expected_layer == "mixed" else [expected_layer]
+    )
+
+    layers = {"short_term": "", "long_term": "", "episodic": "", "semantic": ""}
+
+    if "short_term" in wanted:
+        stm = ShortTermMemory(strategy="sliding", max_recent_messages=6, pressure_tokens=450)
+        for msg in _base_short_term_messages(case):
+            stm.add(msg["role"], msg["content"])
+        for msg in extra_messages or []:
+            stm.add(msg["role"], msg["content"])
+        layers["short_term"] = stm.render()
+
+    if "long_term" in wanted:
+        layers["long_term"] = memory.retrieve_long_term(
+            user_id=user_id, thread_id=thread_id, query=query
+        )
+    if "episodic" in wanted:
+        layers["episodic"] = memory.retrieve_episodic(user_id, query)
+    if "semantic" in wanted:
+        layers["semantic"] = memory.retrieve_semantic(settings.semantic_graph_id, query)
+
+    merged_context, budget = memory.assemble_context(layers)
+    return {"merged_context": merged_context, "layers": layers, "budget": budget}
 
 
 def main() -> None:
     st.set_page_config(page_title="Lab 17 Memory Demo", page_icon="🧠", layout="wide")
     st.markdown(CSS, unsafe_allow_html=True)
-    st.title("🧠 Lab 17 — Memory Agent Demo")
-    st.caption("Load a test case, inspect layered retrieval, then keep chatting as that user.")
+    st.markdown(
+        '<div class="lab-hero"><h1>🧠 Lab 17 — Multi-Memory Agent Demo</h1>'
+        '<p>Zep short-term · long-term · episodic · semantic — pick a case, inspect layered '
+        "retrieval, then keep chatting as that user."
+        '<span class="lab-tag">VinUni Codelab · Memory Systems</span></p></div>',
+        unsafe_allow_html=True,
+    )
 
     with st.sidebar:
-        st.header("⚙️ Setup")
+        st.markdown("### ⚙️ Setup status")
         zep_ok = bool(settings.zep_api_key)
-        st.markdown(("✅" if zep_ok else "⚠️") + " Zep API key "
-                    + ("configured" if zep_ok else "missing"))
-        st.markdown(("✅" if gemini_available() else "⚠️") + " Gemini key "
-                    + ("configured" if gemini_available() else "missing"))
+        gem_ok = gemini_available()
+        zep_pill = '<span class="lab-pill lab-pill-ok">configured</span>' if zep_ok \
+            else '<span class="lab-pill lab-pill-warn">missing</span>'
+        gem_pill = '<span class="lab-pill lab-pill-ok">configured</span>' if gem_ok \
+            else '<span class="lab-pill lab-pill-warn">missing</span>'
+        st.markdown(f'<div class="lab-status">🔑 Zep API key {zep_pill}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="lab-status">✨ Gemini key {gem_pill}</div>', unsafe_allow_html=True)
         st.caption(f"Chat model: `{settings.gemini_model}`")
         st.divider()
 
+        st.markdown("### 🗂️ Test case")
         cases = load_cases()
         if not cases:
             st.error("No evaluation cases found.")
             return
         labels = [format_case(c) for c in cases]
-        chosen = st.selectbox("Test case", labels)
+        chosen = st.selectbox("Pick a case", labels, label_visibility="collapsed")
         case = cases[labels.index(chosen)]
+
+        st.divider()
+        st.caption(f"📦 {len(cases)} case(s) loaded from `data/sessions.json`"
+                   + (" + golden set" if GOLDEN_PATH.exists() else ""))
+
+        st.divider()
+        st.markdown("### 🎨 Layer legend")
+        st.markdown(
+            " ".join(layer_badge(layer) for layer in ("short_term", "long_term", "episodic", "semantic")),
+            unsafe_allow_html=True,
+        )
 
     st.markdown(
         f'<div class="lab-card">{layer_badge(case.get("expected_layer","?"))}'
         f'<b>{case["id"]}</b><br>'
         f'<span class="lab-kv"><b>User:</b> {case.get("user_id","-")} &nbsp;·&nbsp; '
         f'<b>Thread:</b> {case.get("thread_id","-")}</span>'
-        f'<p style="margin:.5rem 0 0">{case.get("query","")}</p>'
+        f'<div class="lab-query">💬 {case.get("query","")}</div>'
         f'<span class="lab-kv">{case.get("description","")}</span></div>',
         unsafe_allow_html=True,
     )
@@ -150,60 +309,71 @@ def main() -> None:
         st.session_state.chat = []
         st.session_state.pop("last_result", None)
 
-    col_run, _ = st.columns([1, 3])
-    if col_run.button("▶️ Run retrieval on this case", use_container_width=True):
+    col_run, col_hint = st.columns([1, 3])
+    if col_run.button("▶️ Run retrieval on this case", use_container_width=True, type="primary"):
         try:
-            memory = StudentMemory(get_zep_client())
-            st.session_state.last_result = retrieve_for_case(memory, case, st.session_state.chat)
+            with st.spinner("Querying Zep memory layers…"):
+                memory = StudentMemory(get_zep_client())
+                st.session_state.last_result = retrieve_for_case(memory, case, st.session_state.chat)
         except Exception as exc:  # noqa: BLE001
             st.exception(exc)
+    col_hint.caption("Runs the 4-layer retrieval + budget assembly for the case above.")
 
     result = st.session_state.get("last_result")
     if result:
-        st.markdown("### 🔎 Retrieved context")
+        st.markdown('<div class="lab-section">🔎 Retrieved context</div>', unsafe_allow_html=True)
         active = [k for k, v in result["layers"].items() if v.strip()]
         st.markdown(" ".join(layer_badge(k) for k in active) or "_(nothing retrieved)_",
                     unsafe_allow_html=True)
 
         if result.get("budget"):
-            cols = st.columns(4)
-            for i, layer in enumerate(("short_term", "long_term", "episodic", "semantic")):
+            st.markdown("<br>", unsafe_allow_html=True)
+            col_a, col_b = st.columns(2)
+            layers_order = ("short_term", "long_term", "episodic", "semantic")
+            for i, layer in enumerate(layers_order):
                 b = result["budget"].get(layer, {})
-                cols[i].metric(
-                    layer,
-                    f"{b.get('used_tokens', 0)} tok",
-                    help=f"limit {b.get('limit_tokens', 0)} · raw {b.get('raw_tokens', 0)}",
-                )
+                target = col_a if i % 2 == 0 else col_b
+                target.markdown(budget_bar_html(layer, b), unsafe_allow_html=True)
 
-        with st.expander("Merged context (budget-trimmed)", expanded=True):
-            st.code(result.get("merged_context") or "(empty)", language="markdown")
-        for name, text in result["layers"].items():
-            if text.strip():
-                with st.expander(f"{name} evidence"):
-                    st.write(text)
+        st.markdown('<div class="lab-section" style="margin-top:1rem">🧵 Merged context (budget-trimmed)</div>',
+                    unsafe_allow_html=True)
+        st.code(result.get("merged_context") or "(empty)", language="markdown")
 
-    st.markdown("### 💬 Continue chat as this user")
+        st.markdown('<div class="lab-section" style="margin-top:1rem">📂 Per-layer evidence</div>',
+                    unsafe_allow_html=True)
+        layer_tabs = st.tabs([f"{LAYER_ICONS.get(n,'')} {n}" for n in result["layers"]])
+        for tab, (name, text) in zip(layer_tabs, result["layers"].items()):
+            with tab:
+                st.write(text.strip() or "_(nothing retrieved for this layer)_")
+    else:
+        st.info("Click **Run retrieval** to fetch short-term / long-term / episodic / semantic evidence for this case.")
+
+    st.divider()
+    st.markdown('<div class="lab-section">💬 Continue chat as this user</div>', unsafe_allow_html=True)
+    st.caption(f"Chatting as `{case.get('user_id', '-')}` on thread `{case.get('thread_id', '-')}`")
     for msg in st.session_state.get("chat", []):
-        with st.chat_message(msg["role"]):
+        avatar = "🧑" if msg["role"] == "user" else "🧠"
+        with st.chat_message(msg["role"], avatar=avatar):
             st.write(msg["content"])
 
     prompt = st.chat_input("Message as this user…")
     if prompt:
         st.session_state.chat.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
+        with st.chat_message("user", avatar="🧑"):
             st.write(prompt)
         try:
-            memory = StudentMemory(get_zep_client())
-            follow = retrieve_for_case(memory, {**case, "query": prompt}, st.session_state.chat)
-            st.session_state.last_result = follow
-            context = follow.get("merged_context", "")
-            if gemini_available():
-                reply = generate_reply(context, st.session_state.chat[:-1], prompt)
-            else:
-                reply = ("_(Gemini key missing — showing retrieved context instead)_\n\n"
-                         + (context[:1500] or "(no memory retrieved)"))
+            with st.spinner("Retrieving memory + generating reply…"):
+                memory = StudentMemory(get_zep_client())
+                follow = retrieve_for_case(memory, {**case, "query": prompt}, st.session_state.chat)
+                st.session_state.last_result = follow
+                context = follow.get("merged_context", "")
+                if gemini_available():
+                    reply = generate_reply(context, st.session_state.chat[:-1], prompt)
+                else:
+                    reply = ("_(Gemini key missing — showing retrieved context instead)_\n\n"
+                             + (context[:1500] or "(no memory retrieved)"))
             st.session_state.chat.append({"role": "assistant", "content": reply})
-            with st.chat_message("assistant"):
+            with st.chat_message("assistant", avatar="🧠"):
                 st.write(reply)
         except Exception as exc:  # noqa: BLE001
             st.exception(exc)
